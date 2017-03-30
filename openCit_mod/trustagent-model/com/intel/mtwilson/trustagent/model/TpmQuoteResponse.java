@@ -28,7 +28,7 @@ public class TpmQuoteResponse {
     public String eventLog; // base64-encoded xml ....
     public String tcbMeasurement;
     public String selectedPcrBanks;
-    
+    public String ima_values;
     // added for assetTag attestation based on sha1(nonce | assetTag
     public boolean isTagProvisioned;
     public byte[] assetTag;
@@ -46,4 +46,10 @@ public class TpmQuoteResponse {
                 + "</client_request>";
      * 
      */
+    public void setImaValue(String ima_values) {
+        this.ima_values=ima_values;
+    }
+    public String getImaValue() {
+        return ima_values;
+    }
 }

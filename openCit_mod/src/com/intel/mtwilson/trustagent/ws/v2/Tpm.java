@@ -186,6 +186,122 @@ public class Tpm {
         return response;
     }
     
+    @POST
+    @Path("/quote_and_ima")
+    @Consumes({MediaType.APPLICATION_XML,MediaType.APPLICATION_JSON})
+    @Produces({MediaType.APPLICATION_XML,MediaType.APPLICATION_JSON})
+    public TpmQuoteResponse tpmQuoteAndIma(TpmQuoteRequest tpmQuoteRequest, @Context HttpServletRequest request) throws IOException, TAException {
+        logPerformance("inside tpmQuote");
+        /**
+         * issue #1038 we will hash this ip address together with the input
+         * nonce to produce the quote nonce; mtwilson server will do the same
+         * thing; this prevents a MITM "quote relay" attack where an attacker
+         * can accept quote requests at host A, forward them to trusted host B,
+         * and then reply with host B's quote to the challenger (same nonce etc)
+         * because with this fix mtwilson is hashing host A's ip address into
+         * the nonce on its end, and host B is hashing its ip address into the
+         * nonce (here), so the quote will fail the challenger's verification
+         * because of the different nonces; Attacker will also not be able to
+         * cheat by hashing host B's ip address into the nonce because host B
+         * will again has its ip address so it will be double-hashed and fail
+         * verification
+         */
+        TrustagentConfiguration configuration = TrustagentConfiguration.loadConfiguration();
+        logPerformance("TrustagentConfiguration.loadConfiguration()");
+        if( configuration.isTpmQuoteWithIpAddress() ) {
+            if( IPv4Address.isValid(request.getLocalAddr()) ) {
+                IPv4Address ipv4 = new IPv4Address(request.getLocalAddr());
+                byte[] extendedNonce = Sha1Digest.digestOf(tpmQuoteRequest.getNonce()).extend(ipv4.toByteArray()).toByteArray(); // again 20 bytes
+                tpmQuoteRequest.setNonce(extendedNonce);
+
+            }
+            else {
+                log.debug("Local address is {}", request.getLocalAddr());
+                throw new WebApplicationException(Response.serverError().header("Error", "tpm.quote.ipv4 enabled but local address not IPv4").build());
+            }
+        }
+          
+        TADataContext context = new TADataContext(); // when we call getSessionId it will create a new random one
+        String osName = System.getProperty("os.name");
+        context.setOsName(osName);
+        
+        //set PCR banks only applies to TPM 2.0
+        if (tpmQuoteRequest.getPcrbanks() == null)
+            context.setSelectedPcrBanks("SHA1");
+        else
+            context.setSelectedPcrBanks(tpmQuoteRequest.getPcrbanks());
+
+        /* If it is Windows host, Here we read Geotag from nvram index 0x40000010 and do sha1(nonce | geotag) and use the result as the nonce for TPM quote
+           As of now, we still keep the same geotag provisioning mechanism by writing it to TPM. there are other approaches as well, but not in implementation.
+        */  
+        boolean isTagProvisioned = false;        
+        byte[] ownerAuth = configuration.getTpmOwnerSecret();
+        byte[] assetTagHash = null;
+        try {
+            assetTagHash = com.intel.mtwilson.trustagent.tpmmodules.Tpm.getModule().readAssetTag(ownerAuth);
+            log.debug("Asset Tag is: {}", assetTagHash);
+            byte[] extendedNoncewithAssetTag = Sha1Digest.digestOf(tpmQuoteRequest.getNonce()).extend(assetTagHash).toByteArray();
+            tpmQuoteRequest.setNonce(extendedNoncewithAssetTag);
+            isTagProvisioned = true;
+        } catch (TpmModule.TpmModuleException ex) {
+            log.debug("Could not read Asset Tag from TPM");
+            log.debug("Asset Tag is not provisioned");
+        }               
+
+        context.setNonce(Base64.encodeBase64String(tpmQuoteRequest.getNonce()));
+        context.setSelectedPCRs(joinIntegers(tpmQuoteRequest.getPcrs(), ' '));
+
+        logPerformance("new TADataContext()");
+        new CreateNonceFileCmd(context).execute(); // FileUtils.write to file nonce (binary)
+        logPerformance("CreateNonceFileCmd");
+        new ReadIdentityCmd(context).execute();  // trustagentrepository.getaikcertificate
+        logPerformance("ReadIdentityCmd");
+
+        // Get the module information
+        if (!osName.toLowerCase().contains("windows")) {
+            new GenerateModulesCmd(context).execute(); // String moduleXml = getXmlFromMeasureLog(configuration);
+            logPerformance("GenerateModulesCmd");
+            new RetrieveTcbMeasurement(context).execute(); //does nothing if measurement.xml does not exist
+            logPerformance("RetrieveTcbMeasurement");
+        }
+        new GenerateQuoteCmd(context).execute();
+        logPerformance("GenerateQuoteCmd");
+        new BuildQuoteXMLCmd(context).execute();
+        logPerformance("BuildQuoteXMLCmd");
+            
+        // return context.getResponseXML();
+        TpmQuoteResponse response = context.getTpmQuoteResponse();
+        response.setImaValue("ima_test");
+        logPerformance("context.getTpmQuoteResponse()");
+
+        //assetTag 
+        //#6560: Null pointer dereference of 'response' where null is returned from a method
+        if (response != null){
+            response.isTagProvisioned = isTagProvisioned;
+            if (isTagProvisioned) 
+                response.assetTag = assetTagHash;
+        }
+
+        // delete temporary session directory
+        if (!osName.toLowerCase().contains("windows")) {
+            CommandLine command = new CommandLine("rm");
+            command.addArgument("-rf");
+            command.addArgument(EscapeUtil.doubleQuoteEscapeShellArgument(context.getDataFolder()));
+            Result result = ExecUtil.execute(command);
+            logPerformance("ExecUtil.execute(command)");
+            if (result.getExitCode() != 0) {
+                log.error("Error running command [{}]: {}", command.getExecutable(), result.getStderr());
+                throw new TAException(ErrorCode.ERROR, result.getStderr());
+            }
+            log.debug("command stdout: {}", result.getStdout());
+        } else {
+            // we should use more neutral ways to delete the folder
+            FileUtils.forceDelete(new File(context.getDataFolder())); 
+        }
+        logPerformance("before return response");
+        return response;
+    }
+    
     private String joinIntegers(int[] pcrs, char separator) {
         String[] array = new String[pcrs.length];
         for(int i=0; i<pcrs.length; i++) {

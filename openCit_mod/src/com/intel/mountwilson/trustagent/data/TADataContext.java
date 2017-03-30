@@ -47,6 +47,7 @@ public class TADataContext {
     private String sessionId;
     private String tcbMeasurement;
     private String selectedPcrBanks;
+    
 
     public String getSelectedPcrBanks() {
         return selectedPcrBanks;
