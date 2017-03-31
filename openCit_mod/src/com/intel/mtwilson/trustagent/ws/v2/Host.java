@@ -46,6 +46,7 @@ public class Host {
             cmd.execute();
             HostInfo host = new HostInfo();
             host.timestamp = System.currentTimeMillis();
+            
     //        host.clientIp = CommandUtil.getHostIpAddress();
             host.errorCode = context.getErrorCode().name();
             host.errorMessage = context.getErrorCode().getMessage();

@@ -38,6 +38,9 @@ public class BuildQuoteXMLCmd implements ICommand {
             tpmQuoteResponse.eventLog = context.getModules(); //base64-encoded  xml which the caller will interpret
             tpmQuoteResponse.tcbMeasurement = context.getTcbMeasurement();
             tpmQuoteResponse.selectedPcrBanks = context.getSelectedPcrBanks();
+            /*********************************************************/
+            //We insert here values regarding IMA
+            tpmQuoteResponse.ima_values = readValuesFromIma();
             context.setTpmQuoteResponse(tpmQuoteResponse);
         }
         catch(Exception e) {
@@ -58,5 +61,8 @@ public class BuildQuoteXMLCmd implements ICommand {
         log.debug("Final content that is being sent back to the AS is : " + responseXML);
             context.setResponseXML(responseXML);
 */
+    }
+    public String readValuesFromIma () {
+    	return "prova IMA";
     }
 }
